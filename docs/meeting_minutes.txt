@@ -1,0 +1,21 @@
+1. human interact with LLM to instruct next steps
+- think about diving deeper into discussion with LLM (scope? vision? focus?)
+- refer to examples from last meeting
+2. Switching to ChatGPT (model 5)
+- 
+
+
+initial prompt
+start loop
+- scrum master (LLM model)
+[Encap]
+- agent create graphs (workflows)
+- run a errorless clean code
+- log out the thought of process/KEY steps taken
+[End of Encap]
+- provide insights/images it provides (ultimate goal)
+- input more instructions/scope limit
+end loop
+
+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
+suggested model: 5o-mini
