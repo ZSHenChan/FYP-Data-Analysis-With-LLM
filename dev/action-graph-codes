@@ -1,197 +1,127 @@
 --- Task 1 ---
-Instruction: Generate a small ActionGraph (at most 3 Nodes) that: (a) load raw data from /data, (b) run quick integrity checks (missing values, types, duplicates), (c) produce a brief summary report and save an interim cleaned CSV. Return only the ActionGraph with ≤3 nodes.
-# Action 1: Load raw CSV data robustly from /data (or provided path). Include necessary imports and locate a CSV if a directory is given.
+Instruction: Load the raw CSV(s) from /data using agent_state['raw_data_path']. Generate only a small ActionGraph (at most 3 nodes) that: (a) reads the file, (b) infers basic schema & missing counts, (c) writes a temporary loaded file (/data/loaded_tmp.csv). Produce a minimal summary (rows, cols, missing per column).
+# Action 1: Read the first raw CSV path from agent_state['raw_data_path'], load into a DataFrame and write a temporary file at /data/loaded_tmp.csv. Include pandas import to avoid NameError.
 import pandas as pd
-import os
 
-# Candidate paths: allow environment override, common locations, or a directory containing a CSV
-raw_candidates = [
-    os.environ.get('RAW_DATA_PATH', 'data/data.csv'),
-    'data/data.csv',
-    '/data/data.csv',
-    '/data'
-]
-raw_data_path = None
-for p in raw_candidates:
-    if not p:
-        continue
-    if os.path.isdir(p):
-        for f in os.listdir(p):
-            if f.lower().endswith('.csv'):
-                raw_data_path = os.path.join(p, f)
-                break
-        if raw_data_path:
-            break
-    elif os.path.isfile(p):
-        raw_data_path = p
-        break
+# get the first path from agent_state
+raw_paths = agent_state.get('raw_data_path', [])
+if not raw_paths:
+    raise ValueError("No raw_data_path found in agent_state")
+path = raw_paths[0]
 
-if raw_data_path is None:
-    raise FileNotFoundError(f"Raw data csv not found in candidates: {raw_candidates}")
+# read CSV into df
+df = pd.read_csv(path)
 
-# Read CSV into df
-df = pd.read_csv(raw_data_path)
-print(f"Loaded {raw_data_path} with {len(df)} rows and {len(df.columns)} columns")
-# expose raw path for downstream steps
-_loaded_raw_path = raw_data_path
+# write temporary loaded file
+df.to_csv('/data/loaded_tmp.csv', index=False)
 
-# Action 2: Run quick integrity checks: data types, missing value counts/percentages, duplicate counts. Prepare a cleaned dataframe by removing exact duplicate rows.
-# Quick integrity checks
-integrity_report = {}
-integrity_report['num_rows'] = len(df)
-integrity_report['num_cols'] = len(df.columns)
-integrity_report['dtypes'] = df.dtypes.apply(lambda x: str(x)).to_dict()
-integrity_report['missing_counts'] = df.isnull().sum().to_dict()
-integrity_report['missing_percent'] = (df.isnull().mean() * 100).round(2).to_dict()
-integrity_report['duplicate_count'] = int(df.duplicated().sum())
+# quick confirmation
+print(f"Loaded {df.shape[0]} rows and {df.shape[1]} columns to /data/loaded_tmp.csv")
 
-# Print concise summary
-print('Integrity check summary:')
-print(f"Rows: {integrity_report['num_rows']}, Columns: {integrity_report['num_cols']}")
-print(f"Duplicate rows: {integrity_report['duplicate_count']}")
-missing_cols = {k: v for k, v in integrity_report['missing_percent'].items() if v > 0}
-print('Columns with missing values (>0%):', dict(list(missing_cols.items())[:10]))
+# Action 2: Infer a minimal schema and missing counts, produce a small summary (rows, cols, missing per column), perform a minimal cleaning (strip column names), store cleaned DataFrame as variable 'cleaned' and save to /data/cleaned.csv.
+import pandas as pd
 
-# Create an interim cleaned dataframe by dropping exact duplicates (keep first occurrence)
-cleaned_df = df.drop_duplicates().reset_index(drop=True)
-print(f"After dropping duplicates: {len(cleaned_df)} rows (dropped {integrity_report['duplicate_count']} rows)")
-
-# Action 3: Produce a brief summary report (JSON) and save the interim cleaned CSV to an output folder (interim). Use RUN_ID/envs when available and print saved paths.
-import json
-import os
-
-run_id = os.environ.get('RUN_ID', '1')
-out_dir = os.environ.get('OUT_DIR', 'interim')
-os.makedirs(out_dir, exist_ok=True)
-
-cleaned_path = os.path.join(out_dir, f'cleaned_data_run_{run_id}.csv')
-cleaned_df.to_csv(cleaned_path, index=False)
-
-report = {
-    'run_id': run_id,
-    'original_rows': len(df),
-    'rows_after_dedup': len(cleaned_df),
-    'num_columns': len(cleaned_df.columns),
-    'dtypes': cleaned_df.dtypes.apply(str).to_dict(),
-    'missing_percent_after_dedup': (cleaned_df.isnull().mean() * 100).round(2).to_dict(),
-    'duplicate_count_after': int(cleaned_df.duplicated().sum()),
-    'source_path': globals().get('_loaded_raw_path')
-}
-
-report_path = os.path.join(out_dir, f'summary_report_run_{run_id}.json')
-with open(report_path, 'w') as f:
-    json.dump(report, f, indent=2)
-
-print(f"Saved cleaned data to: {cleaned_path}")
-print(f"Saved summary report to: {report_path}")
-
---- Task 2 ---
-Instruction: Generate a small ActionGraph (at most 3 Nodes) that: (a) apply detailed cleaning rules to interim CSV (impute/drop, correct types, normalize), (b) run validation checks/unit tests on cleaned data, (c) save final cleaned dataset. Return only the ActionGraph with ≤3 nodes.
-# Action 1: Load the interim CSV if df is missing, normalize column names, drop duplicates, coerce columns to appropriate types (dates/numeric), impute missing values for numeric and categorical columns, drop rows with excessive missingness, and normalize numeric features to [0,1]. This step also fixes the NameError by ensuring df is defined from the raw_data_path.
+# Ensure df is available (reload from temp if running nodes separately)
 try:
     df
 except NameError:
-    # debug: df wasn't defined; load from known raw path
-    df = pd.read_csv('data/data.csv')
+    df = pd.read_csv('/data/loaded_tmp.csv')
 
-# Normalize column names
-df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
+# basic summary
+rows, cols = df.shape
+missing = df.isnull().sum()
+schema = {col: str(df[col].dtype) for col in df.columns}
+summary = {'rows': rows, 'cols': cols, 'missing_per_column': missing.to_dict()}
 
-# Drop full-duplicate rows
-df = df.drop_duplicates().reset_index(drop=True)
+# minimal cleaning: strip whitespace from column names and keep data unchanged
+cleaned = df.copy()
+cleaned.columns = cleaned.columns.str.strip()
 
-# Try to coerce columns to datetimes where appropriate
-for col in df.columns:
-    # attempt datetime parse: if many values parse to datetimes, keep them
-    coerced_dt = pd.to_datetime(df[col], errors='coerce')
-    if coerced_dt.notna().sum() >= len(df) * 0.5:
-        df[col] = coerced_dt
+# save cleaned data and expose variable 'cleaned'
+cleaned.to_csv('/data/cleaned.csv', index=False)
 
-# Coerce numeric-like columns: remove common formatting and coerce
-for col in df.columns:
-    # work on string representation to remove commas/currency symbols
-    coerced = pd.to_numeric(df[col].astype(str).str.replace('[\$,]', '', regex=True), errors='coerce')
-    # if at least half of values are numeric after coercion, treat column as numeric
-    if coerced.notna().sum() >= len(df) * 0.5:
-        df[col] = coerced
+# print the minimal summary
+print(summary)
 
-# Drop rows with too many missing values (e.g., >50% missing)
-row_missing_frac = df.isna().mean(axis=1)
-if (row_missing_frac > 0.5).any():
-    df = df.loc[row_missing_frac <= 0.5].reset_index(drop=True)
+--- Task 2 ---
+Instruction: Clean the loaded data and save the final cleaned dataset with name 'cleaned' at /data/cleaned.csv. Generate only a small ActionGraph (at most 3 nodes) that: (a) handles missing values (fill or drop), (b) removes duplicates and enforces column types, (c) writes /data/cleaned.csv. Update agent_state agent_messages with a progress update including cleaned_path and a short schema/summary.
+# Action 1: Handle missing values, try basic type conversions, and remove duplicates. Produce a cleaned DataFrame named 'cleaned'.
+cleaned = df.copy()
+# drop rows where all values are missing
+cleaned.dropna(axis=0, how='all', inplace=True)
 
-# Impute numeric columns with median
-numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-for col in numeric_cols:
-    median = df[col].median()
-    df[col] = df[col].fillna(median)
+# Fill numeric columns with median
+for col in cleaned.select_dtypes(include=['number']).columns:
+    med = cleaned[col].median()
+    cleaned[col].fillna(med, inplace=True)
 
-# Impute categorical/object columns with mode (or 'missing' fallback)
-cat_cols = df.select_dtypes(include=['object']).columns.tolist()
-for col in cat_cols:
-    if df[col].notna().any():
-        mode_vals = df[col].mode()
-        fill_val = mode_vals.iloc[0] if len(mode_vals) > 0 else 'missing'
-    else:
-        fill_val = 'missing'
-    df[col] = df[col].fillna(fill_val)
+# Fill object/category columns with mode (or empty string if no mode)
+for col in cleaned.select_dtypes(include=['object', 'category']).columns:
+    if cleaned[col].isnull().any():
+        mode = cleaned[col].mode(dropna=True)
+        if len(mode):
+            cleaned[col].fillna(mode[0], inplace=True)
+        else:
+            cleaned[col].fillna('', inplace=True)
 
-# For datetime columns, if any missing remain, leave as-is or optionally fill with a sentinel; here we leave them
+# Attempt to convert object columns to datetime or numeric when a majority convert
+for col in cleaned.select_dtypes(include=['object']).columns:
+    dt = pd.to_datetime(cleaned[col], errors='coerce')
+    if dt.notna().sum() >= len(cleaned) * 0.5:
+        cleaned[col] = dt
+        continue
+    num = pd.to_numeric(cleaned[col], errors='coerce')
+    if num.notna().sum() >= len(cleaned) * 0.5:
+        cleaned[col] = num
 
-# Normalize numeric columns to [0,1]
-for col in numeric_cols:
-    col_min = df[col].min()
-    col_max = df[col].max()
-    if pd.isna(col_min) or pd.isna(col_max) or col_max == col_min:
-        # constant or invalid column; set zeros
-        df[col] = 0.0
-    else:
-        df[col] = (df[col] - col_min) / (col_max - col_min)
+# Drop exact duplicate rows
+cleaned.drop_duplicates(inplace=True)
 
-# keep cleaned dataframe in variable df for downstream steps
+# Convert numeric columns to nullable integer when all present values are integer-like
+for col in cleaned.select_dtypes(include=['number']).columns:
+    ser = cleaned[col].dropna()
+    if len(ser) > 0 and ((ser % 1) == 0).all():
+        cleaned[col] = cleaned[col].astype('Int64')
 
+# Action 2: Save the cleaned DataFrame to a writable location (fall back if /data is read-only) and update agent_state['agent_messages'] with cleaned_path plus a short schema and summary.
+import os
 
-# Action 2: Run validation checks / unit tests on the cleaned dataframe: ensure column names normalized, no duplicate rows, numeric columns have no nulls and are within [0,1], and basic sanity checks. Raise informative AssertionError if any check fails.
-# Basic validation checks
-errors = []
+# Try several paths; /data may be read-only so fall back to cwd or /tmp
+out_paths = ['/data/cleaned.csv', './cleaned.csv', '/tmp/cleaned.csv']
+saved_path = None
+last_err = None
+for p in out_paths:
+    try:
+        d = os.path.dirname(p)
+        if d and not os.path.exists(d):
+            os.makedirs(d, exist_ok=True)
+        cleaned.to_csv(p, index=False)
+        saved_path = p
+        break
+    except Exception as e:
+        last_err = e
 
-# 1) Column name normalization: lowercase, stripped, underscores
-bad_cols = [c for c in df.columns if c != c.strip().lower().replace(' ', '_')]
-if bad_cols:
-    errors.append(f"Column names not normalized: {bad_cols}")
+if saved_path is None:
+    # propagate a clear error if nothing worked
+    raise last_err or RuntimeError('Failed to save cleaned dataset to any candidate path')
 
-# 2) No duplicate rows
-if df.duplicated().any():
-    errors.append("Duplicates remain in the dataframe")
+# Update agent_state with progress, include cleaned_path and a compact schema/summary
+agent_state = globals().get('agent_state', {})
+if not isinstance(agent_state, dict):
+    agent_state = {}
 
-# 3) Numeric columns: no nulls and values in [0,1]
-numeric_cols = df.select_dtypes(include=['number']).columns.tolist()
-for col in numeric_cols:
-    if df[col].isna().any():
-        errors.append(f"Nulls remain in numeric column: {col}")
-    col_min = df[col].min()
-    col_max = df[col].max()
-    if not (col_min >= 0 and col_max <= 1):
-        errors.append(f"Numeric column {col} not normalized to [0,1] (min={col_min}, max={col_max})")
+schema = {col: str(dtype) for col, dtype in cleaned.dtypes.items()}
+summary = {'rows': len(cleaned), 'columns': len(cleaned.columns)}
+message = {
+    'status': 'cleaned',
+    'cleaned_path': saved_path,
+    'schema': schema,
+    'summary': summary
+}
+agent_state.setdefault('agent_messages', []).append(message)
+# write back into globals so downstream code can access updated agent_state
+globals()['agent_state'] = agent_state
 
-# 4) Basic row-level sanity: no row should be >50% missing
-max_row_missing = df.isna().mean(axis=1).max()
-if max_row_missing > 0.5:
-    errors.append(f"There exists a row with >50% missing values (max fraction={max_row_missing})")
-
-# Raise if any errors found, otherwise print a success summary
-if errors:
-    # combine messages and raise for CI / pipeline visibility
-    raise AssertionError('Validation failed:\n' + '\n'.join(errors))
-else:
-    print('All validation checks passed. Rows:', len(df), 'Columns:', len(df.columns))
-
-
-# Action 3: Save the final cleaned dataframe to disk (CSV) and return the path. Use a clear filename under the data/ directory.
-output_path = 'data/cleaned_data.csv'
-df.to_csv(output_path, index=False)
-print(f'Cleaned data saved to: {output_path}')
-# expose path for downstream systems
-output_path
-
+# Optionally print/save the chosen path for interactive runs
+print('cleaned dataset saved to:', saved_path)
 
