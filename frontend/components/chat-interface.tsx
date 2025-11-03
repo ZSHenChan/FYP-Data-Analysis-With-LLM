@@ -20,7 +20,7 @@ type Message = {
   id: string;
   role: "user" | "bot";
   content: string;
-  fileName?: string;
+  fileNames?: string[];
   chart?: "bar" | "heatmap";
 };
 
@@ -30,38 +30,49 @@ type Session = {
   messages: Message[];
 };
 
-// --- Mock Data ---
+const generate_message_id = (): string =>
+  typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `id_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+
 const initialSessions: Session[] = [
   {
     id: "session-1",
-    title: "Quarterly Sales Analysis",
+    title: "Data Analyst",
     messages: [
       {
         id: "msg-1",
         role: "user",
-        content: "Analyze sales_data_2024.csv. What are the key trends?",
-        fileName: "sales_data_2024.csv",
+        content: "Analyse the correlation between gold price and gold volume",
+        fileNames: ["data.csv"],
       },
       {
         id: "msg-2",
         role: "bot",
-        content:
-          "Of course. The data shows a significant 25% YoY growth, with the 'Electronics' category leading. The 'North' region was the top performer in Q4.",
-        chart: "bar",
+        content: "...Initiating Task",
+      },
+      {
+        id: "msg-22",
+        role: "bot",
+        content: "...Analysing Diagrams",
+      },
+      {
+        id: "msg-23",
+        role: "bot",
+        content: "...Fabricating Final Answer",
       },
       {
         id: "msg-3",
         role: "bot",
-        content:
-          "There is also a strong positive correlation between advertising spend and sales volume across all product categories.",
-        chart: "heatmap",
+        content: `Short summary of what the data already suggests
+- There is an average negative association between gold price and traded volume: higher volumes tend to occur with lower prices.  
+- The relationship is weak and unstable: scatter points are widely spread with clusters and outliers, residuals from a simple linear fit show curvature and changing spread, and residuals have heavy tails.  
+- Time structure matters: price trends upward while volume tends downward with spikes. The price–volume link appears to change over time (nonstationarity / regime changes).
+
+Key caution
+- Don’t trust a single simple OLS fit for inference or causal claims. The OLS assumptions are violated (nonlinearity, heteroscedasticity, non-normal errors, and time dependence), so p-values and confidence intervals from naive OLS are unreliable.`,
       },
     ],
-  },
-  {
-    id: "session-2",
-    title: "User Engagement Metrics",
-    messages: [],
   },
 ];
 
@@ -87,7 +98,7 @@ export function ChatLayout() {
   };
 
   return (
-    <div className="flex h-dvh w-full overflow-y-scroll max-w-7xl gap-4">
+    <div className="h-dvh overflow-y-scroll gap-4">
       {/* Sidebar for Sessions */}
       {/* <ChatSidebar
         sessions={sessions}
@@ -166,8 +177,126 @@ const ChatSidebar: FC<ChatSidebarProps> = ({
 // =================================================================
 const ChatPanel: FC<{ session: Session }> = ({ session }) => {
   const [prompt, setPrompt] = useState("");
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [uploadedFiles, setUploadedFiles] = useState<File[] | []>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const MAX_FILES = 3;
+
+  const removeFile = (indexToRemove: number) => {
+    setUploadedFiles((prevFiles) =>
+      prevFiles.filter((_, index) => index !== indexToRemove)
+    );
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      const newFiles = Array.from(e.target.files);
+      const currentFileCount = uploadedFiles.length;
+
+      // Check if we can add any files
+      if (currentFileCount >= MAX_FILES) {
+        alert(`You can only upload a maximum of ${MAX_FILES} files.`);
+        // Clear the input value
+        if (fileInputRef.current) {
+          fileInputRef.current.value = "";
+        }
+        return;
+      }
+
+      // Check if the new selection exceeds the limit
+      const remainingSlots = MAX_FILES - currentFileCount;
+      let filesToAdd = newFiles;
+
+      if (newFiles.length > remainingSlots) {
+        // If it does, only take the files that fit
+        filesToAdd = newFiles.slice(0, remainingSlots);
+        alert(
+          `You can only add ${remainingSlots} more file(s). ${filesToAdd.length} file(s) were added.`
+        );
+      }
+
+      setUploadedFiles((prevFiles) => [...prevFiles, ...filesToAdd]);
+    }
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  };
+
+  const handleSend = async (userRequest: string, files: File[] | undefined) => {
+    const userMsg: Message = {
+      id: generate_message_id(),
+      role: "user",
+      content: userRequest,
+      fileNames: files && [...files.map((f) => f.name)],
+    };
+    setPrompt("");
+    setUploadedFiles([]);
+    setMessages((prev) => [...prev, userMsg]);
+    const formData = new FormData();
+    formData.append("prompt", userRequest);
+    if (files) {
+      files.forEach((file) => {
+        formData.append("files", file);
+      });
+    }
+
+    const response = await fetch("/api/process", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.detail || "Failed to start process");
+    }
+
+    const { session_id } = await response.json();
+    console.log("Process started with session_id:", session_id);
+
+    const UPSTREAM_URL = process.env.UPSTREAM_URL || "http://0.0.0.0:8000";
+    const eventSource = new EventSource(
+      `${UPSTREAM_URL}/api/v1/process/events/${session_id}`
+    );
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        const botMsg: Message = {
+          id: generate_message_id(),
+          role: "bot",
+          content: data.message,
+        };
+
+        if (data.type == "progress") {
+          botMsg.content = "..." + data.message;
+        } else if (data.type == "response") {
+          botMsg.content = data.message;
+        } else {
+          console.log("SSE data:", data);
+          return;
+        }
+
+        setMessages((prev) => [...prev, botMsg]);
+        console.log("SSE data:", data);
+      } catch (e) {
+        if (event.data === "[DONE]") {
+          console.log("Stream finished, closing connection.");
+          eventSource.close(); // <-- Client closes itself
+          return;
+        }
+        console.log("Non-JSON SSE event:", event.data);
+      }
+    };
+
+    eventSource.onerror = (err) => {
+      console.error("SSE error", err);
+      eventSource.close();
+    };
+
+    // terminating the connection on component unmount
+    return () => eventSource.close();
+  };
 
   return (
     <div
@@ -187,7 +316,7 @@ const ChatPanel: FC<{ session: Session }> = ({ session }) => {
       {/* Messages */}
       <ScrollArea className="flex-1">
         <div className="space-y-6 p-4">
-          {session.messages.map((msg) => (
+          {messages.map((msg) => (
             <div
               key={msg.id}
               className={`flex gap-3 ${
@@ -202,14 +331,16 @@ const ChatPanel: FC<{ session: Session }> = ({ session }) => {
                 }`}
               >
                 <p className="mb-2">{msg.content}</p>
-                {msg.fileName && (
-                  <Badge
-                    variant="secondary"
-                    className="font-normal cursor-default"
-                  >
-                    <Paperclip className="h-3 w-3 mr-1.5" /> {msg.fileName}
-                  </Badge>
-                )}
+                {msg.fileNames &&
+                  msg.fileNames.map((f) => (
+                    <Badge
+                      variant="secondary"
+                      className="font-normal cursor-default"
+                      key={f}
+                    >
+                      <Paperclip className="h-3 w-3 mr-1.5" /> {f}
+                    </Badge>
+                  ))}
                 {msg.chart && <GraphPlaceholder type={msg.chart} />}
               </div>
             </div>
@@ -232,8 +363,9 @@ const ChatPanel: FC<{ session: Session }> = ({ session }) => {
           <div className="absolute top-1/2 -translate-y-1/2 right-3 flex items-center">
             <input
               type="file"
+              multiple
               ref={fileInputRef}
-              onChange={(e) => setUploadedFile(e.target.files?.[0] ?? null)}
+              onChange={handleFileChange}
               className="hidden"
             />
             <Button
@@ -243,22 +375,28 @@ const ChatPanel: FC<{ session: Session }> = ({ session }) => {
             >
               <Paperclip className="h-5 w-5 text-neutral-600" />
             </Button>
-            <Button size="icon" disabled={!prompt}>
+            <Button
+              size="icon"
+              disabled={!prompt}
+              onClick={async () => handleSend(prompt, uploadedFiles)}
+            >
               <Send className="h-5 w-5" />
             </Button>
           </div>
         </div>
-        {uploadedFile && (
-          <div className="mt-3">
-            <Badge variant="outline" className="font-normal p-2">
-              {uploadedFile.name}
-              <button
-                onClick={() => setUploadedFile(null)}
-                className="ml-1.5 rounded-full hover:bg-neutral-200 p-0.5"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </Badge>
+        {uploadedFiles.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {uploadedFiles.map((file, index) => (
+              <Badge key={index} variant="outline" className="font-normal p-2">
+                <span className="truncate max-w-[150px]">{file.name}</span>
+                <button
+                  onClick={() => removeFile(index)}
+                  className="ml-1.5 rounded-full hover:bg-neutral-200 p-0.5"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </Badge>
+            ))}
           </div>
         )}
       </div>
