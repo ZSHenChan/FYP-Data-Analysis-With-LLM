@@ -23,27 +23,27 @@ The workflow combines **Self-Correcting Code Generation** with **Multi-Perspecti
 
 ```mermaid
 graph TD
-    User([User Query]) --> A[MasterAgent (Planner)]
+    User(["User Query"]) --> A["MasterAgent (Planner)"]
 
-    subgraph "Execution Layer (TaskGraph)"
-        A --> B[TaskNode 1: Data Cleaning]
-        A --> C[TaskNode 2: Modeling]
-        A --> D[TaskNode 3: Visualization]
+    subgraph Execution ["Execution Layer (TaskGraph)"]
+        A --> B["TaskNode 1: Data Cleaning"]
+        A --> C["TaskNode 2: Modeling"]
+        A --> D["TaskNode 3: Visualization"]
     end
 
-    subgraph "Self-Correcting Code Loop"
-        D --> E{ActionGraph}
-        E -- "Generate Code" --> F[CodeExecutor]
+    subgraph Correction ["Self-Correcting Code Loop"]
+        D --> E{"ActionGraph"}
+        E -- "Generate Code" --> F["CodeExecutor"]
         F -- "Error (stderr)" --> E
-        F -- "Success (stdout)" --> G[Generated Artifacts (Plots/Tables)]
+        F -- "Success (stdout)" --> G["Generated Artifacts (Plots/Tables)"]
     end
 
-    subgraph "Research Layer: Bias Injection"
-        G --> H[AnalysisAgent: The Bull]
-        G --> I[AnalysisAgent: The Bear]
-        G --> J[AnalysisAgent: The Skeptic]
+    subgraph Research ["Research Layer: Bias Injection"]
+        G --> H["AnalysisAgent: The Bull"]
+        G --> I["AnalysisAgent: The Bear"]
+        G --> J["AnalysisAgent: The Skeptic"]
 
-        H --> K(The Neutral Synthesizer)
+        H --> K("The Neutral Synthesizer")
         I --> K
         J --> K
     end
