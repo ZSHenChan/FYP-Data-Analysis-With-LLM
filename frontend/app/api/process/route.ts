@@ -1,5 +1,3 @@
-export const runtime = "edge";
-
 const FASTAPI_URL =
   process.env.NEXT_PUBLIC_FASTAPI_BACKEND_URL || "http://0.0.0.0:8000";
 
@@ -12,12 +10,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    // 1. Get the FormData from the incoming request
-    // This is the modern, Edge-compatible way to handle FormData
     const formData = await req.formData();
-
-    // 2. Get the prompt and file
     const prompt = formData.get("prompt");
+    const session_id = formData.get("session_id");
     const files = formData.getAll("files") as File[];
 
     if (!prompt) {
@@ -29,6 +24,7 @@ export async function POST(req: Request) {
 
     const backendFormData = new FormData();
     backendFormData.append("prompt", prompt);
+    if (session_id) backendFormData.append("session_id", session_id);
 
     if (files && files.length > 0) {
       files.forEach((file) => {

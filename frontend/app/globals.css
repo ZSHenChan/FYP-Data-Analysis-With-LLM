@@ -121,3 +121,15 @@
     @apply bg-gradient-to-br from-slate-50 to-slate-200;
   }
 }
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+.animate-shimmer {
+  animation: shimmer 7s linear infinite;
+}
